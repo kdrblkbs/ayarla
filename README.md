@@ -1,0 +1,2 @@
+# ayarla
+Manage dotfiles
