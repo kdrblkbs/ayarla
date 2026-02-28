@@ -1,11 +1,22 @@
 use anyhow::bail;
 use serde::Deserialize;
 use std::{
-    fs::{DirEntry, read_dir, read_to_string},
+    fs::{read_dir, read_to_string, DirEntry},
     path::{Path, PathBuf},
 };
 
-const MANIFEST_FILE_NAME: &str = "manifest.toml";
+use crate::MANIFEST_FILE_NAME;
+
+pub fn new_checks(settings_directory: &str) -> Result<PathBuf, anyhow::Error> {
+    let settings_directory_path = Path::new(settings_directory);
+    if settings_directory_path.exists() {
+        bail!(
+            "{} already exists. Can not create new settings directory.",
+            settings_directory
+        );
+    }
+    Ok(settings_directory_path.to_path_buf())
+}
 
 #[derive(Deserialize)]
 pub struct ManifestItem {
@@ -20,7 +31,7 @@ pub struct Manifest {
     pub manifest_items: Vec<ManifestItem>,
 }
 
-pub fn checks(settings_directory: &str) -> Result<(PathBuf, Manifest), anyhow::Error> {
+pub fn bootstrap_checks(settings_directory: &str) -> Result<(PathBuf, Manifest), anyhow::Error> {
     let are_we_ready = are_we_ready_for_takeoff(settings_directory)?;
     let manifest = red_manifesto(are_we_ready.manifest_content)?;
     Ok((are_we_ready.settings_dir_path, manifest))
@@ -91,10 +102,32 @@ fn red_manifesto(manifest_content: String) -> Result<Manifest, anyhow::Error> {
 mod tests {
     use super::*;
     use std::{
-        fs::{File, create_dir_all},
+        fs::{create_dir_all, File},
         io::Write,
     };
     use tempfile::tempdir;
+
+    #[test]
+    fn new_checks_with_existing_settings_dir_assert_err() {
+        let temp_dir = tempdir().expect("to create temp_dir");
+        let dir_path = temp_dir.path().join("settings_dir_with_tmux_conf");
+        create_dir_all(&dir_path).expect("to create settings_dir_with_nvim");
+
+        let result = new_checks(dir_path.to_str().expect("to get str from path"));
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn new_checks_with_not_existing_settings_dir_assert_ok() {
+        let temp_dir = tempdir().expect("to create temp_dir");
+        let dir_path = temp_dir.path().join("settings_dir_with_tmux_conf");
+
+        let result = new_checks(dir_path.to_str().expect("to get str from path"));
+        
+        assert!(result.is_ok());
+        assert_eq!(dir_path.to_str(), result.unwrap().to_str());
+    }
 
     #[test]
     fn are_we_ready_to_takeoff_with_not_existing_dir_assert_er() {
@@ -327,7 +360,7 @@ source = "tmux.conf"
     }
 
     #[test]
-    fn checks_happy_path_assert_ok() {
+    fn bootstrap_checks_happy_path_assert_ok() {
         let temp_dir = tempdir().expect("to create temp_dir");
         let dir_path = temp_dir.path().join("settings_dir_with_tmux_conf");
         create_dir_all(&dir_path).expect("to create settings_dir_with_nvim");
@@ -345,8 +378,8 @@ force = true
         let tmux_conf = dir_path.join(".tmux.conf");
         File::create(&tmux_conf).expect("to create .tmux.conf");
 
-        let result =
-            checks(dir_path.to_str().expect("to get str from path")).expect("to get results");
+        let result = bootstrap_checks(dir_path.to_str().expect("to get str from path"))
+            .expect("to get results");
 
         assert_eq!(result.0, dir_path);
         assert_eq!(result.1.manifest_items[0].source, "tmux.conf");

@@ -1,12 +1,24 @@
 use crate::preflight::Manifest;
-use std::fs::{create_dir_all, remove_dir_all, remove_file};
+use std::fs::{create_dir_all, remove_dir_all, remove_file, File};
 use std::os::unix::fs::symlink;
 use std::path::PathBuf;
+
+use crate::MANIFEST_FILE_NAME;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum AyarlaStatus {
     Ok,
     Warn,
+}
+
+pub fn before_we_go(settings_dir_path: PathBuf) -> Result<AyarlaStatus, anyhow::Error> {
+    create_dir_all(&settings_dir_path)?;
+    let manifest_file_path = settings_dir_path.join(MANIFEST_FILE_NAME);
+    if !manifest_file_path.exists() {
+        File::create_new(manifest_file_path)?;
+        return Ok(AyarlaStatus::Ok);
+    }
+    Ok(AyarlaStatus::Warn)
 }
 
 pub fn lets_go(
@@ -50,7 +62,7 @@ pub fn lets_go(
 mod tests {
     use super::*;
     use crate::preflight::ManifestItem;
-    use std::fs::{self, DirEntry, File, create_dir_all};
+    use std::fs::{self, create_dir_all, DirEntry, File};
     use tempfile::tempdir;
 
     fn get_test_manifest() -> Manifest {
@@ -68,6 +80,49 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn before_we_go_creates_settings_dir_and_manifest() {
+        let temp_dir = tempdir().expect("to create temp_dir");
+        let settings_dir_path = temp_dir.path().join("settings_dir");
+
+        let result = before_we_go(settings_dir_path.clone());
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), AyarlaStatus::Ok);
+        assert!(settings_dir_path.exists());
+        assert!(settings_dir_path.join(MANIFEST_FILE_NAME).exists());
+    }
+
+    #[test]
+    fn before_we_go_with_existing_settings_dir_creates_manifest() {
+        let temp_dir = tempdir().expect("to create temp_dir");
+        let settings_dir_path = temp_dir.path().join("settings_dir");
+        create_dir_all(&settings_dir_path).expect("to create settings_dir");
+
+        let result = before_we_go(settings_dir_path.clone());
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), AyarlaStatus::Ok);
+        assert!(settings_dir_path.exists());
+        assert!(settings_dir_path.join(MANIFEST_FILE_NAME).exists());
+    }
+
+    #[test]
+    fn before_we_go_creates_with_existing_settings_dir_and_manifest_assert_warning() {
+        let temp_dir = tempdir().expect("to create temp_dir");
+        let settings_dir_path = temp_dir.path().join("settings_dir");
+        create_dir_all(&settings_dir_path).expect("to create settings_dir");
+        let manifest = settings_dir_path.join(MANIFEST_FILE_NAME);
+        File::create(&manifest).expect("to create manifest.toml");
+
+        let result = before_we_go(settings_dir_path.clone());
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), AyarlaStatus::Warn);
+        assert!(settings_dir_path.exists());
+        assert!(settings_dir_path.join(MANIFEST_FILE_NAME).exists());
     }
 
     #[test]
