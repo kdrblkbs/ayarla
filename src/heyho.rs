@@ -1,12 +1,36 @@
+use anyhow::bail;
+
 use crate::preflight::Manifest;
 use std::fs::{create_dir_all, remove_dir_all, remove_file};
 use std::os::unix::fs::symlink;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum AyarlaStatus {
     Ok,
     Warn,
+}
+
+fn join_if_inside(base_path: &Path, inside: &str) -> Result<PathBuf, anyhow::Error> {
+    let inside = Path::new(inside);
+    if inside.is_absolute() {
+        bail!("inside path can not be absolute: {inside:?}")
+    }
+
+    for component in inside.components() {
+        match component {
+            Component::Normal(_) => {}
+            Component::CurDir => {}
+            _ => bail!("path component not allowed: {inside:?}"),
+        }
+    }
+
+    let join = base_path.join(inside);
+    if base_path == join {
+        bail!("base path can not be equal to joined path")
+    }
+
+    Ok(join)
 }
 
 pub fn lets_go(
@@ -16,13 +40,13 @@ pub fn lets_go(
 ) -> Result<AyarlaStatus, anyhow::Error> {
     let mut status = AyarlaStatus::Ok;
     for item in manifest.manifest_items {
-        let source_path = settings_dir_path.join(item.source);
+        let source_path = join_if_inside(&settings_dir_path, &item.source)?;
         if !source_path.exists() {
             status = AyarlaStatus::Warn;
             continue;
         }
 
-        let destination_path = base_path.join(item.destination);
+        let destination_path = join_if_inside(&base_path, &item.destination)?;
         if destination_path.exists() {
             if item.force {
                 if destination_path.is_dir() {
@@ -34,7 +58,9 @@ pub fn lets_go(
                 continue;
             }
         }
-        let parent = destination_path.parent().unwrap();
+        let parent = destination_path
+            .parent()
+            .expect("guaranteed by join_if_inside");
         if !parent.exists() {
             create_dir_all(parent)?;
         }
@@ -50,7 +76,7 @@ pub fn lets_go(
 mod tests {
     use super::*;
     use crate::preflight::ManifestItem;
-    use std::fs::{self, DirEntry, File, create_dir_all};
+    use std::fs::{self, create_dir_all, DirEntry, File};
     use tempfile::tempdir;
 
     fn get_test_manifest() -> Manifest {
@@ -67,6 +93,16 @@ mod tests {
                     force: false,
                 },
             ],
+        }
+    }
+
+    fn get_custom_manifest(source: &str, destination: &str, force: bool) -> Manifest {
+        Manifest {
+            manifest_items: vec![ManifestItem {
+                source: source.to_string(),
+                destination: destination.to_string(),
+                force,
+            }],
         }
     }
 
@@ -158,5 +194,225 @@ mod tests {
             .map(|d| d.expect("to get dir entry"))
             .all(|d| d.file_name() == "nvim" && d.file_type().unwrap().is_symlink());
         assert!(just_as_expected);
+    }
+
+    #[test]
+    fn lets_go_empty_manifest_item_destination() {
+        let temp_dir = tempdir().expect("to create temp_dir");
+        let home_dir_path = temp_dir.path().join("home");
+        create_dir_all(&home_dir_path).expect("to create home dir");
+        let settings_dir_path = home_dir_path.join(".ayarla");
+        create_dir_all(&settings_dir_path).expect("to create dir");
+        let tmux_conf = settings_dir_path.join(".tmux.conf");
+        File::create(&tmux_conf).expect("to create .tmux.conf");
+        let must = home_dir_path.join("must_exists.txt");
+        fs::write(&must, b"...").expect("...");
+
+        let result = lets_go(
+            home_dir_path.to_path_buf(),
+            settings_dir_path.to_path_buf(),
+            get_custom_manifest(".tmux.conf", "", true),
+        );
+
+        assert!(result.is_err());
+        assert!(must.exists());
+    }
+
+    #[test]
+    fn lets_go_cur_dir_manifest_item_destination() {
+        let temp_dir = tempdir().expect("to create temp_dir");
+        let home_dir_path = temp_dir.path().join("home");
+        create_dir_all(&home_dir_path).expect("to create home dir");
+        let settings_dir_path = home_dir_path.join(".ayarla");
+        create_dir_all(&settings_dir_path).expect("to create dir");
+        let tmux_conf = settings_dir_path.join(".tmux.conf");
+        File::create(&tmux_conf).expect("to create .tmux.conf");
+        let must = home_dir_path.join("must_exists.txt");
+        fs::write(&must, b"...").expect("...");
+
+        let result = lets_go(
+            home_dir_path.to_path_buf(),
+            settings_dir_path.to_path_buf(),
+            get_custom_manifest(".tmux.conf", ".", true),
+        );
+
+        assert!(result.is_err());
+        assert!(must.exists());
+    }
+
+    #[test]
+    fn lets_go_parent_dir_manifest_item_destination() {
+        let temp_dir = tempdir().expect("to create temp_dir");
+        let home_dir_path = temp_dir.path().join("home");
+        create_dir_all(&home_dir_path).expect("to create home dir");
+        let settings_dir_path = home_dir_path.join(".ayarla");
+        create_dir_all(&settings_dir_path).expect("to create dir");
+        let tmux_conf = settings_dir_path.join(".tmux.conf");
+        File::create(&tmux_conf).expect("to create .tmux.conf");
+        let must = home_dir_path.join("must_exists.txt");
+        fs::write(&must, b"...").expect("...");
+
+        let result = lets_go(
+            home_dir_path.to_path_buf(),
+            settings_dir_path.to_path_buf(),
+            get_custom_manifest(".tmux.conf", "..", true),
+        );
+
+        assert!(result.is_err());
+        assert!(must.exists());
+    }
+
+    #[test]
+    fn lets_go_abs_path_manifest_item_destination() {
+        let temp_dir = tempdir().expect("to create temp_dir");
+        let home_dir_path = temp_dir.path().join("home");
+        create_dir_all(&home_dir_path).expect("to create home dir");
+        let settings_dir_path = home_dir_path.join(".ayarla");
+        create_dir_all(&settings_dir_path).expect("to create dir");
+        let tmux_conf = settings_dir_path.join(".tmux.conf");
+        File::create(&tmux_conf).expect("to create .tmux.conf");
+        let must = home_dir_path.join("must_exists.txt");
+        fs::write(&must, b"...").expect("...");
+
+        let result = lets_go(
+            home_dir_path.to_path_buf(),
+            settings_dir_path.to_path_buf(),
+            get_custom_manifest(".tmux.conf", "/etc/passwd", true),
+        );
+
+        assert!(result.is_err());
+        assert!(must.exists());
+    }
+
+    #[test]
+    fn lets_go_traversal_path_manifest_item_destination() {
+        let temp_dir = tempdir().expect("to create temp_dir");
+        let home_dir_path = temp_dir.path().join("home");
+        create_dir_all(&home_dir_path).expect("to create home dir");
+        let settings_dir_path = home_dir_path.join(".ayarla");
+        create_dir_all(&settings_dir_path).expect("to create dir");
+        let tmux_conf = settings_dir_path.join(".tmux.conf");
+        File::create(&tmux_conf).expect("to create .tmux.conf");
+        let must = home_dir_path.join("must_exists.txt");
+        fs::write(&must, b"...").expect("...");
+
+        let result = lets_go(
+            home_dir_path.to_path_buf(),
+            settings_dir_path.to_path_buf(),
+            get_custom_manifest(".tmux.conf", "../../etc", true),
+        );
+
+        assert!(result.is_err());
+        assert!(must.exists());
+    }
+
+    #[test]
+    fn lets_go_empty_manifest_item_source() {
+        let temp_dir = tempdir().expect("to create temp_dir");
+        let home_dir_path = temp_dir.path().join("home");
+        create_dir_all(&home_dir_path).expect("to create home dir");
+        let settings_dir_path = home_dir_path.join(".ayarla");
+        create_dir_all(&settings_dir_path).expect("to create dir");
+        let tmux_conf = settings_dir_path.join(".tmux.conf");
+        File::create(&tmux_conf).expect("to create .tmux.conf");
+        let must = home_dir_path.join("must_exists.txt");
+        fs::write(&must, b"...").expect("...");
+
+        let result = lets_go(
+            home_dir_path.to_path_buf(),
+            settings_dir_path.to_path_buf(),
+            get_custom_manifest("", ".tmux.conf", true),
+        );
+
+        assert!(result.is_err());
+        assert!(must.exists());
+    }
+
+    #[test]
+    fn lets_go_cur_dir_manifest_item_source() {
+        let temp_dir = tempdir().expect("to create temp_dir");
+        let home_dir_path = temp_dir.path().join("home");
+        create_dir_all(&home_dir_path).expect("to create home dir");
+        let settings_dir_path = home_dir_path.join(".ayarla");
+        create_dir_all(&settings_dir_path).expect("to create dir");
+        let tmux_conf = settings_dir_path.join(".tmux.conf");
+        File::create(&tmux_conf).expect("to create .tmux.conf");
+        let must = home_dir_path.join("must_exists.txt");
+        fs::write(&must, b"...").expect("...");
+
+        let result = lets_go(
+            home_dir_path.to_path_buf(),
+            settings_dir_path.to_path_buf(),
+            get_custom_manifest(".", ".tmux.conf", true),
+        );
+
+        assert!(result.is_err());
+        assert!(must.exists());
+    }
+
+    #[test]
+    fn lets_go_parent_dir_manifest_item_source() {
+        let temp_dir = tempdir().expect("to create temp_dir");
+        let home_dir_path = temp_dir.path().join("home");
+        create_dir_all(&home_dir_path).expect("to create home dir");
+        let settings_dir_path = home_dir_path.join(".ayarla");
+        create_dir_all(&settings_dir_path).expect("to create dir");
+        let tmux_conf = settings_dir_path.join(".tmux.conf");
+        File::create(&tmux_conf).expect("to create .tmux.conf");
+        let must = home_dir_path.join("must_exists.txt");
+        fs::write(&must, b"...").expect("...");
+
+        let result = lets_go(
+            home_dir_path.to_path_buf(),
+            settings_dir_path.to_path_buf(),
+            get_custom_manifest("..", ".tmux.conf", true),
+        );
+
+        assert!(result.is_err());
+        assert!(must.exists());
+    }
+
+    #[test]
+    fn lets_go_abs_path_manifest_item_source() {
+        let temp_dir = tempdir().expect("to create temp_dir");
+        let home_dir_path = temp_dir.path().join("home");
+        create_dir_all(&home_dir_path).expect("to create home dir");
+        let settings_dir_path = home_dir_path.join(".ayarla");
+        create_dir_all(&settings_dir_path).expect("to create dir");
+        let tmux_conf = settings_dir_path.join(".tmux.conf");
+        File::create(&tmux_conf).expect("to create .tmux.conf");
+        let must = home_dir_path.join("must_exists.txt");
+        fs::write(&must, b"...").expect("...");
+
+        let result = lets_go(
+            home_dir_path.to_path_buf(),
+            settings_dir_path.to_path_buf(),
+            get_custom_manifest("/etc/passwd", ".tmux.conf", true),
+        );
+
+        assert!(result.is_err());
+        assert!(must.exists());
+    }
+
+    #[test]
+    fn lets_go_traversal_path_manifest_item_source() {
+        let temp_dir = tempdir().expect("to create temp_dir");
+        let home_dir_path = temp_dir.path().join("home");
+        create_dir_all(&home_dir_path).expect("to create home dir");
+        let settings_dir_path = home_dir_path.join(".ayarla");
+        create_dir_all(&settings_dir_path).expect("to create dir");
+        let tmux_conf = settings_dir_path.join(".tmux.conf");
+        File::create(&tmux_conf).expect("to create .tmux.conf");
+        let must = home_dir_path.join("must_exists.txt");
+        fs::write(&must, b"...").expect("...");
+
+        let result = lets_go(
+            home_dir_path.to_path_buf(),
+            settings_dir_path.to_path_buf(),
+            get_custom_manifest("../../etc", ".tmux.conf", true),
+        );
+
+        assert!(result.is_err());
+        assert!(must.exists());
     }
 }

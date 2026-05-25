@@ -1,7 +1,7 @@
 use anyhow::bail;
 use serde::Deserialize;
 use std::{
-    fs::{DirEntry, read_dir, read_to_string},
+    fs::{read_dir, read_to_string, DirEntry},
     path::{Path, PathBuf},
 };
 
@@ -91,7 +91,7 @@ fn red_manifesto(manifest_content: String) -> Result<Manifest, anyhow::Error> {
 mod tests {
     use super::*;
     use std::{
-        fs::{File, create_dir_all},
+        fs::{create_dir_all, File},
         io::Write,
     };
     use tempfile::tempdir;
