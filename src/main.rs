@@ -16,7 +16,6 @@ It was implemntend so that the author can tell everyone the following:
 If you want to try it out have a look at the readme in
 https://github.com/kdrblkbs/ayarla for a quickstart guide."
 )]
-
 struct Cli {
     /// verbose
     #[arg(short, long)]
