@@ -1,7 +1,7 @@
 use anyhow::bail;
 
 use crate::preflight::Manifest;
-use std::fs::{create_dir_all, remove_dir_all, remove_file};
+use std::fs::{create_dir_all, remove_dir_all, remove_file, symlink_metadata};
 use std::os::unix::fs::symlink;
 use std::path::{Component, Path, PathBuf};
 
@@ -47,15 +47,18 @@ pub fn lets_go(
         }
 
         let destination_path = join_if_inside(&base_path, &item.destination)?;
-        if destination_path.exists() {
-            if item.force {
-                if destination_path.is_dir() {
+        match symlink_metadata(&destination_path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+            Ok(m) => {
+                if !item.force {
+                    continue;
+                }
+                if m.is_dir() {
                     remove_dir_all(&destination_path)?;
                 } else {
                     remove_file(&destination_path)?;
                 }
-            } else {
-                continue;
             }
         }
         let parent = destination_path
@@ -76,7 +79,7 @@ pub fn lets_go(
 mod tests {
     use super::*;
     use crate::preflight::ManifestItem;
-    use std::fs::{self, create_dir_all, DirEntry, File};
+    use std::fs::{self, create_dir_all, read_link, DirEntry, File};
     use tempfile::tempdir;
 
     fn get_test_manifest() -> Manifest {
@@ -414,5 +417,60 @@ mod tests {
 
         assert!(result.is_err());
         assert!(must.exists());
+    }
+
+    #[test]
+    fn lets_go_broken_symlink_not_force_no_overwrite() {
+        let temp_dir = tempdir().expect("to create temp_dir");
+        let settings_dir_path = temp_dir.path().join("settings_dir");
+        let tmux_conf = settings_dir_path.join(".tmux.conf");
+        create_dir_all(&settings_dir_path).expect("to create dir");
+        File::create(&tmux_conf).expect("to create .tmux.conf");
+        let home_dir_path = temp_dir.path().join("home");
+        create_dir_all(&home_dir_path).expect("to create home dir");
+        symlink(
+            settings_dir_path.join("does_not_exist"),
+            home_dir_path.join(".tmux.conf"),
+        )
+        .expect("to create link");
+
+        let result = lets_go(
+            home_dir_path.to_path_buf(),
+            settings_dir_path.to_path_buf(),
+            get_custom_manifest(".tmux.conf", ".tmux.conf", false),
+        );
+
+        assert!(result.is_ok());
+        let target = read_link(home_dir_path.join(".tmux.conf")).expect("to read link");
+        assert_eq!(settings_dir_path.join("does_not_exist"), target)
+    }
+
+    #[test]
+    fn lets_go_broken_symlink_force_overwrite() {
+        let temp_dir = tempdir().expect("to create temp_dir");
+        let settings_dir_path = temp_dir.path().join("settings_dir");
+        let tmux_conf = settings_dir_path.join(".tmux.conf");
+        create_dir_all(&settings_dir_path).expect("to create dir");
+        File::create(&tmux_conf).expect("to create .tmux.conf");
+        let home_dir_path = temp_dir.path().join("home");
+        create_dir_all(&home_dir_path).expect("to create home dir");
+        symlink(
+            settings_dir_path.join("does_not_exist"),
+            home_dir_path.join(".tmux.conf"),
+        )
+        .expect("to create link");
+
+        let result = lets_go(
+            home_dir_path.to_path_buf(),
+            settings_dir_path.to_path_buf(),
+            get_custom_manifest(".tmux.conf", ".tmux.conf", true),
+        );
+
+        assert!(result.is_ok());
+        let target = read_link(home_dir_path.join(".tmux.conf")).expect("to read link");
+        let expected = tmux_conf
+            .canonicalize()
+            .expect("to canonicalize .tmux.conf");
+        assert_eq!(expected, target)
     }
 }
