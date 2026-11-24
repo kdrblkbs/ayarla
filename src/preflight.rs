@@ -43,8 +43,7 @@ fn are_we_ready_for_takeoff(settings_directory: &str) -> Result<WeAreReadyMaybe,
     }
 
     let dir_entries = read_dir(settings_directory_path)?
-        .filter(|d| d.is_ok())
-        .map(|d| d.unwrap())
+        .flatten()
         .collect::<Vec<DirEntry>>();
 
     if dir_entries.is_empty() {
@@ -176,7 +175,7 @@ mod tests {
         let mut manifest = File::create(&manifest).expect("to create manifest.toml");
         let manifest_content = "karl ftw!";
         manifest
-            .write(manifest_content.as_bytes())
+            .write_all(manifest_content.as_bytes())
             .expect("to write to manifest");
 
         let result = are_we_ready_for_takeoff(dir_path.to_str().expect("to get str from path"))
@@ -195,7 +194,7 @@ mod tests {
         let mut manifest = File::create(&manifest).expect("to create manifest.toml");
         let manifest_content = "karl ftw!";
         manifest
-            .write(manifest_content.as_bytes())
+            .write_all(manifest_content.as_bytes())
             .expect("to write to manifest");
         let tmux_conf = dir_path.join(".tmux.conf");
         File::create(&tmux_conf).expect("to create .tmux.conf");
@@ -227,7 +226,7 @@ force = true
         assert_eq!(manifest.manifest_items.len(), 1);
         assert_eq!(manifest.manifest_items[0].source, "nvim");
         assert_eq!(manifest.manifest_items[0].destination, "./config/nvim");
-        assert_eq!(manifest.manifest_items[0].force, true);
+        assert!(manifest.manifest_items[0].force);
     }
 
     #[test]
@@ -244,7 +243,7 @@ force = true
         assert_eq!(manifest.manifest_items.len(), 1);
         assert_eq!(manifest.manifest_items[0].source, "nvim");
         assert_eq!(manifest.manifest_items[0].destination, "./config/nvim");
-        assert_eq!(manifest.manifest_items[0].force, true);
+        assert!(manifest.manifest_items[0].force);
     }
 
     #[test]
@@ -266,7 +265,7 @@ force = false
         assert_eq!(manifest.manifest_items.len(), 2);
         assert_eq!(manifest.manifest_items[1].source, "tmux.conf");
         assert_eq!(manifest.manifest_items[1].destination, ".tmux.conf");
-        assert_eq!(manifest.manifest_items[1].force, false);
+        assert!(!manifest.manifest_items[1].force);
     }
 
     #[test]
@@ -282,7 +281,7 @@ destination = "./config/nvim"
         assert_eq!(manifest.manifest_items.len(), 1);
         assert_eq!(manifest.manifest_items[0].source, "nvim");
         assert_eq!(manifest.manifest_items[0].destination, "./config/nvim");
-        assert_eq!(manifest.manifest_items[0].force, false);
+        assert!(!manifest.manifest_items[0].force);
     }
 
     #[test]
@@ -340,7 +339,7 @@ destination = ".tmux.conf"
 force = true
 "#;
         manifest
-            .write(manifest_content.as_bytes())
+            .write_all(manifest_content.as_bytes())
             .expect("to write to manifest");
         let tmux_conf = dir_path.join(".tmux.conf");
         File::create(&tmux_conf).expect("to create .tmux.conf");
@@ -351,6 +350,6 @@ force = true
         assert_eq!(result.0, dir_path);
         assert_eq!(result.1.manifest_items[0].source, "tmux.conf");
         assert_eq!(result.1.manifest_items[0].destination, ".tmux.conf");
-        assert_eq!(result.1.manifest_items[0].force, true);
+        assert!(result.1.manifest_items[0].force);
     }
 }
